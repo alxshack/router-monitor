@@ -85,6 +85,20 @@ def api_day():
         'intervals': data   # список словарей {time, status}
     })
 
+@app.route('/api/status')
+def api_status():
+    stats = get_stats()
+    last_row = get_recent(1)
+    last = None
+    if last_row:
+        ts, success, latency = last_row[0]
+        last = {
+            'timestamp': ts,
+            'success': bool(success),
+            'latency': latency
+        }
+    return jsonify({'stats': stats, 'last': last})
+
 @app.route('/api/data')
 def api_data():
     rows = get_recent(500)

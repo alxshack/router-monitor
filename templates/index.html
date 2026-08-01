@@ -40,22 +40,16 @@
     <!-- Последний статус -->
     <div class="last-status">
         <span class="label">🔔 Последний статус:</span>
-        {% if last_status %}
-            <span class="status-badge {% if last_status == 'Доступен' %}status-up{% else %}status-down{% endif %}">
-                {{ last_status }}
-            </span>
-            <span>в {{ last_time }}</span>
-        {% else %}
-            <span>Нет данных</span>
-        {% endif %}
+        <span id="lastStatusBadge" class="status-badge {{ 'status-up' if last_status == 'Доступен' else 'status-down' }}">{{ last_status or 'Нет данных' }}</span>
+        <span id="lastStatusTime">{% if last_time %}в {{ last_time }}{% endif %}</span>
     </div>
 
     <!-- Статистика -->
     <div class="stats">
-        <div class="stat-box">📊 Всего проверок: <span>{{ stats.total }}</span></div>
-        <div class="stat-box">✅ Успешных: <span class="up">{{ stats.success }}</span></div>
-        <div class="stat-box">❌ Неудачных: <span class="down">{{ stats.fail }}</span></div>
-        <div class="stat-box">📈 Доступность: <span>{{ stats.percent }}%</span></div>
+        <div class="stat-box">📊 Всего проверок: <span id="statTotal">{{ stats.total }}</span></div>
+        <div class="stat-box">✅ Успешных: <span id="statSuccess" class="up">{{ stats.success }}</span></div>
+        <div class="stat-box">❌ Неудачных: <span id="statFail" class="down">{{ stats.fail }}</span></div>
+        <div class="stat-box">📈 Доступность: <span id="statPercent">{{ stats.percent }}%</span></div>
     </div>
 
     <!-- График за день (10-минутные интервалы, только завершённые) -->
@@ -183,6 +177,44 @@
         }
     });
 
+    // ---------- Автообновление статуса и статистики ----------
+    function formatServerTime(iso) {
+        const dt = new Date(iso);
+        const months = ['января','февраля','марта','апреля','мая','июня',
+                       'июля','августа','сентября','октября','ноября','декабря'];
+        const pad = n => String(n).padStart(2, '0');
+        return `${dt.getDate()} ${months[dt.getMonth()]} ${dt.getFullYear()} (${pad(dt.getHours())}:${pad(dt.getMinutes())})`;
+    }
+
+    function refreshStatus() {
+        fetch('/api/status')
+            .then(response => response.json())
+            .then(data => {
+                const stats = data.stats;
+                document.getElementById('statTotal').textContent = stats.total;
+                document.getElementById('statSuccess').textContent = stats.success;
+                document.getElementById('statFail').textContent = stats.fail;
+                document.getElementById('statPercent').textContent = stats.percent + '%';
+
+                const badge = document.getElementById('lastStatusBadge');
+                if (data.last) {
+                    badge.className = 'status-badge ' + (data.last.success ? 'status-up' : 'status-down');
+                    badge.textContent = data.last.success ? 'Доступен' : 'Недоступен';
+                    const timeSpan = document.getElementById('lastStatusTime');
+                    if (timeSpan) timeSpan.textContent = 'в ' + formatServerTime(data.last.timestamp);
+                } else {
+                    badge.className = 'status-badge status-down';
+                    badge.textContent = 'Нет данных';
+                }
+
+                // Подхватываем только что завершённый 10-минутный интервал
+                if (datePicker.value) {
+                    updateChart(datePicker.value);
+                }
+            })
+            .catch(() => {});
+    }
+
     // ---------- При загрузке страницы ----------
     document.addEventListener('DOMContentLoaded', function() {
         const today = new Date();
@@ -193,6 +225,9 @@
         datePicker.value = todayStr;
         updateChart(todayStr);
     });
+
+    // Обновление каждые 60 секунд
+    setInterval(refreshStatus, 60000);
 </script>
 </body>
 </html>

@@ -1,7 +1,7 @@
 import time
 import sys
 import requests
-from db import init_db, insert_ping
+from db import init_db, insert_ping, cleanup_old_data
 
 # Укажите ваш домен KeenDNS (без http://, только имя)
 ROUTER_DOMAIN = 'tihultra.netcraze.pro'   # замените на ваше имя
@@ -28,7 +28,11 @@ def check_web(url):
 def main():
     init_db()
     print(f"Service started. Checking {ROUTER_URL} every {INTERVAL}s")
+    last_cleanup = 0
     while True:
+        if time.time() - last_cleanup >= 24 * 3600:
+            cleanup_old_data()
+            last_cleanup = time.time()
         success, latency = check_web(ROUTER_URL)
         insert_ping(success, latency)
         status = "UP" if success else "DOWN"

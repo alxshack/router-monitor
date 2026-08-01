@@ -27,6 +27,14 @@ def insert_ping(success, latency=None):
     conn.commit()
     conn.close()
 
+def cleanup_old_data(keep_days=365):
+    cutoff = (datetime.datetime.now() - datetime.timedelta(days=keep_days)).isoformat()
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute('DELETE FROM pings WHERE timestamp < ?', (cutoff,))
+    conn.commit()
+    conn.close()
+
 def get_recent(limit=100):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
