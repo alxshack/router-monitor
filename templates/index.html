@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Мониторинг роутера Keenetic</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Arial, sans-serif; margin: 20px; background: #f8f9fa; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        h1, h2 { color: #2c3e50; }
+        .stats { display: flex; gap: 20px; margin-bottom: 20px; flex-wrap: wrap; }
+        .stat-box { background: #fff; padding: 15px 25px; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); flex: 1; min-width: 150px; }
+        .stat-box span { font-weight: bold; font-size: 1.2em; }
+        .up { color: #27ae60; }
+        .down { color: #e74c3c; }
+        .last-status { background: #fff; padding: 15px 25px; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 20px; display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+        .last-status .label { font-weight: 600; }
+        .status-badge { display: inline-block; padding: 6px 18px; border-radius: 30px; font-weight: bold; }
+        .status-up { background: #d4edda; color: #155724; }
+        .status-down { background: #f8d7da; color: #721c24; }
+        .chart-container { background: #fff; padding: 20px; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 30px; }
+        .controls { display: flex; align-items: center; gap: 20px; margin-bottom: 15px; flex-wrap: wrap; }
+        .controls label { font-weight: 600; }
+        .controls input[type="date"] { padding: 8px 12px; border: 1px solid #ccc; border-radius: 6px; font-size: 1em; }
+        table { width: 100%; border-collapse: collapse; background: #fff; border-radius: 10px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.08); margin-bottom: 30px; }
+        th, td { padding: 12px 15px; text-align: left; border-bottom: 1px solid #ecf0f1; }
+        th { background: #ecf0f1; font-weight: 600; }
+        .footer { margin-top: 20px; color: #7f8c8d; font-size: 0.9em; text-align: center; }
+        .badge { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 0.85em; }
+        .badge-up { background: #d4edda; color: #155724; }
+        .badge-down { background: #f8d7da; color: #721c24; }
+        @media (max-width: 600px) { .stats { flex-direction: column; } }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>📶 Статус роутера Keenetic Ultra</h1>
+
+    <!-- Последний статус -->
+    <div class="last-status">
+        <span class="label">🔔 Последний статус:</span>
+        {% if last_status %}
+            <span class="status-badge {% if last_status == 'Доступен' %}status-up{% else %}status-down{% endif %}">
+                {{ last_status }}
+            </span>
+            <span>в {{ last_time }}</span>
+        {% else %}
+            <span>Нет данных</span>
+        {% endif %}
+    </div>
+
+    <!-- Статистика -->
+    <div class="stats">
+        <div class="stat-box">📊 Всего проверок: <span>{{ stats.total }}</span></div>
+        <div class="stat-box">✅ Успешных: <span class="up">{{ stats.success }}</span></div>
+        <div class="stat-box">❌ Неудачных: <span class="down">{{ stats.fail }}</span></div>
+        <div class="stat-box">📈 Доступность: <span>{{ stats.percent }}%</span></div>
+    </div>
+
+    <!-- График за день (10-минутные интервалы, только завершённые) -->
+    <div class="chart-container">
+        <div class="controls">
+            <label for="datePicker">📅 Выберите дату:</label>
+            <input type="date" id="datePicker">
+            <span id="selectedDateDisplay" style="margin-left:10px; font-weight:500;"></span>
+        </div>
+        <canvas id="dayChart" width="800" height="300"></canvas>
+        <p style="text-align:center; color:#555; margin-top:10px;">✅ Зелёный – интервал полностью доступен, ❌ Красный – были сбои, ⬜ Серый – нет данных</p>
+    </div>
+
+    <!-- Периоды -->
+    <h2>📋 Периоды доступности и недоступности</h2>
+    <table>
+        <thead><tr><th>Начало</th><th>Окончание</th><th>Статус</th></tr></thead>
+        <tbody>
+            {% for period in periods %}
+            <tr>
+                <td>{{ period.start }}</td>
+                <td>{{ period.end }}</td>
+                <td><span class="badge {% if period.status == 'Доступен' %}badge-up{% else %}badge-down{% endif %}">{{ period.status }}</span></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <div class="footer">Данные обновляются каждые 10 минут. Выбор даты обновляет график автоматически.</div>
+</div>
+
+<script>
+    // ---------- Инициализация графика ----------
+    const ctx = document.getElementById('dayChart').getContext('2d');
+    let dayChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: [],
+            datasets: [{
+                label: 'Доступность',
+                data: [],
+                backgroundColor: [],
+                borderColor: '#888',
+                borderWidth: 1
+            }]
+        },
+        options: {
+            responsive: true,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            const val = context.raw;
+                            if (val === null) return 'Нет данных';
+                            return val === 1 ? '✅ Доступен' : '❌ Недоступен';
+                        }
+                    }
+                }
+            },
+            scales: {
+                y: {
+                    min: -0.2,
+                    max: 1.2,
+                    ticks: {
+                        stepSize: 1,
+                        callback: function(value) {
+                            if (value === 0) return '❌';
+                            if (value === 1) return '✅';
+                            return '';
+                        }
+                    },
+                    grid: { display: false }
+                },
+                x: {
+                    ticks: {
+                        maxTicksLimit: 24,
+                        autoSkip: true,
+                        maxRotation: 45
+                    }
+                }
+            }
+        }
+    });
+
+    // ---------- Функция обновления графика по дате ----------
+    function updateChart(dateStr) {
+        fetch(`/api/day?date=${dateStr}`)
+            .then(response => response.json())
+            .then(data => {
+                const intervals = data.intervals; // массив {time, status}
+                const labels = intervals.map(item => item.time);
+                const values = intervals.map(item => item.status); // 1, 0 или null
+                const colors = intervals.map(item => {
+                    if (item.status === null) return '#cccccc';
+                    return item.status === 1 ? '#27ae60' : '#e74c3c';
+                });
+
+                dayChart.data.labels = labels;
+                dayChart.data.datasets[0].data = values;
+                dayChart.data.datasets[0].backgroundColor = colors;
+                dayChart.update();
+
+                // Отображаем выбранную дату
+                const display = document.getElementById('selectedDateDisplay');
+                if (dateStr) {
+                    const parts = dateStr.split('-');
+                    const months = ['января','февраля','марта','апреля','мая','июня',
+                                   'июля','августа','сентября','октября','ноября','декабря'];
+                    display.textContent = `${parseInt(parts[2])} ${months[parseInt(parts[1])-1]} ${parts[0]}`;
+                } else {
+                    display.textContent = '';
+                }
+            })
+            .catch(err => {
+                console.error('Ошибка загрузки данных:', err);
+            });
+    }
+
+    // ---------- Обработчик изменения даты ----------
+    const datePicker = document.getElementById('datePicker');
+    datePicker.addEventListener('change', function() {
+        if (this.value) {
+            updateChart(this.value);
+        }
+    });
+
+    // ---------- При загрузке страницы ----------
+    document.addEventListener('DOMContentLoaded', function() {
+        const today = new Date();
+        const year = today.getFullYear();
+        const month = String(today.getMonth() + 1).padStart(2, '0');
+        const day = String(today.getDate()).padStart(2, '0');
+        const todayStr = `${year}-${month}-${day}`;
+        datePicker.value = todayStr;
+        updateChart(todayStr);
+    });
+</script>
+</body>
+</html>
