@@ -50,8 +50,7 @@
             </div>
             <span class="end-date" id="endDateDisplay"></span>
         </div>
-        <canvas id="dayChart" height="80"></canvas>
-        <p style="text-align:center; color:#555; margin-top:10px;">✅ Зелёный – интервал полностью доступен, ❌ Красный – были сбои, ⬜ Серый – нет данных. Пунктирная линия показывает текущее время.</p>
+        <canvas id="dayChart" height="210"></canvas>
     </div>
 
     <div class="footer">Данные обновляются каждые 10 минут. Отчёт обновляется автоматически.</div>
@@ -82,6 +81,7 @@
         },
         options: {
             responsive: true,
+            layout: { padding: { top: 130 } },
             plugins: {
                 legend: { display: false },
                 tooltip: {
@@ -154,6 +154,77 @@
     };
     Chart.register(nowLinePlugin);
 
+    // ---------- Плагин: полоса периодов доступности ----------
+    const periodsStrip = {
+        id: 'periodsStrip',
+        beforeDatasetsDraw(chart) {
+            const periods = chart.periods;
+            if (!periods || periods.length === 0) return;
+            const meta = chart.getDatasetMeta(0);
+            if (!meta.data || meta.data.length === 0) return;
+            const area = chart.chartArea;
+            const c = chart.ctx;
+            const barW = meta.data[0].width;
+            const barTop = area.top - 30;
+            const barH = 10;
+            const zoneMid = area.top - 65;
+
+            const x1Of = p => meta.data[p.startIdx].x - barW / 2;
+            const x2Of = p => meta.data[p.endIdx].x + barW / 2;
+
+            // Сегменты
+            c.save();
+            periods.forEach(p => {
+                const x1 = x1Of(p), x2 = x2Of(p);
+                if (x2 < area.left || x1 > area.right) return;
+                c.fillStyle = p.value === 1 ? '#27ae60' : '#e74c3c';
+                c.fillRect(x1, barTop, x2 - x1, barH);
+            });
+            c.restore();
+
+            // Длительности (по середине сегмента)
+            c.save();
+            c.font = '10px Segoe UI, Arial, sans-serif';
+            c.textAlign = 'center';
+            c.textBaseline = 'middle';
+            c.fillStyle = '#2c3e50';
+            periods.forEach(p => {
+                if (!p.durLabel) return;
+                const x1 = x1Of(p), x2 = x2Of(p);
+                const w = c.measureText(p.durLabel).width;
+                if (x2 - x1 < w + 8) return;
+                c.fillText(p.durLabel, (x1 + x2) / 2, barTop + barH / 2);
+            });
+            c.restore();
+
+            // Границы (вертикальные подписи)
+            const boundaries = [];
+            periods.forEach(p => {
+                boundaries.push({ x: x1Of(p), label: p.startLabel });
+                boundaries.push({ x: x2Of(p), label: p.endLabel });
+            });
+            boundaries.sort((a, b) => a.x - b.x);
+            c.save();
+            c.font = '9px Segoe UI, Arial, sans-serif';
+            c.textAlign = 'center';
+            c.textBaseline = 'middle';
+            c.fillStyle = '#2c3e50';
+            let lastX = -Infinity;
+            boundaries.forEach(b => {
+                if (b.x < area.left || b.x > area.right) return;
+                if (b.x - lastX < 18) return;
+                lastX = b.x;
+                c.save();
+                c.translate(b.x, zoneMid);
+                c.rotate(Math.PI / 2);
+                c.fillText(b.label, 0, 0);
+                c.restore();
+            });
+            c.restore();
+        }
+    };
+    Chart.register(periodsStrip);
+
     // ---------- Форматирование ----------
     function formatDateRu(dateStr) {
         const parts = dateStr.split('-');
@@ -169,6 +240,47 @@
 
     function daysBetween(a, b) {
         return Math.round((Date.UTC(b.year, b.month-1, b.day) - Date.UTC(a.year, a.month-1, a.day)) / 86400000);
+    }
+
+    function fmtMinutes(m) {
+        if (m < 60) return `${m} мин`;
+        const h = Math.floor(m / 60), r = m % 60;
+        return r === 0 ? `${h} ч` : `${h} ч ${r} мин`;
+    }
+
+    // Периоды: соседние одинаковые статусы; "нет данных" (null) — разрыв
+    function buildPeriods(intervals, mode, startDate) {
+        const periods = [];
+        const startDD = startDate.slice(8, 10), startMM = startDate.slice(5, 7);
+        let cur = null;
+        intervals.forEach((item, i) => {
+            let val;
+            if (mode === 'day') {
+                val = (item.status === 1 || item.status === 0) ? item.status : null;
+            } else {
+                val = item.percent == null ? null : (item.percent >= 100 ? 1 : 0);
+            }
+            if (val === null) {
+                cur = null;
+                return;
+            }
+            const label = mode === 'day'
+                ? `${startDD}.${startMM} ${item.time}`
+                : `${item.date.slice(8, 10)}.${item.date.slice(5, 7)}`;
+            if (cur && cur.value === val) {
+                cur.endIdx = i;
+                cur.endLabel = label;
+            } else {
+                if (cur) periods.push(cur);
+                cur = { value: val, startIdx: i, endIdx: i, startLabel: label, endLabel: label };
+            }
+        });
+        if (cur) periods.push(cur);
+        periods.forEach(p => {
+            const cnt = p.endIdx - p.startIdx + 1;
+            p.durLabel = mode === 'day' ? fmtMinutes(cnt * 10) : `${cnt} д`;
+        });
+        return periods;
     }
 
     // ---------- Обновление графика ----------
@@ -236,6 +348,7 @@
                 dayChart.data.datasets[0].backgroundColor = colors;
                 dayChart.data.datasets[0].rawTotals = intervals.map(item => item.total);
                 dayChart.nowLineIndex = nowIndex;
+                dayChart.periods = buildPeriods(intervals, data.mode, data.start);
                 dayChart.update();
             })
             .catch(err => {
