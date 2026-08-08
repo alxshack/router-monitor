@@ -14,6 +14,8 @@ ROUTER_DOMAIN = os.environ.get('ROUTER_DOMAIN', 'tihultra.netcraze.pro')
 ROUTER_URL = f'https://{ROUTER_DOMAIN}'
 TIMEOUT = float(os.environ.get('CHECK_TIMEOUT', 5))  # секунд
 INTERVAL = int(os.environ.get('CHECK_INTERVAL', 600))  # 10 минут
+CHECK_ATTEMPTS = int(os.environ.get('CHECK_ATTEMPTS', 3))
+CHECK_RETRY_DELAY = int(os.environ.get('CHECK_RETRY_DELAY', 10))  # секунд между попытками
 
 def check_web(url):
     """Проверяет доступность веб-интерфейса по HTTP(S)."""
@@ -30,17 +32,31 @@ def check_web(url):
         print(f"HTTP error: {e}", file=sys.stderr)
         return False, None
 
+def check_web_with_retry(url):
+    """Проверяет доступность до CHECK_ATTEMPTS раз с паузой между попытками.
+    Возвращает (success, latency, attempts). Недоступен — только после всех отказов."""
+    for attempt in range(1, CHECK_ATTEMPTS + 1):
+        success, latency = check_web(url)
+        if success:
+            return True, latency, attempt
+        if attempt < CHECK_ATTEMPTS:
+            print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - attempt {attempt}/{CHECK_ATTEMPTS} failed, "
+                  f"retrying in {CHECK_RETRY_DELAY}s", file=sys.stderr)
+            time.sleep(CHECK_RETRY_DELAY)
+    return False, None, CHECK_ATTEMPTS
+
 def main():
     init_db()
-    print(f"Service started. Checking {ROUTER_URL} every {INTERVAL}s")
+    print(f"Service started. Checking {ROUTER_URL} every {INTERVAL}s "
+          f"(attempts: {CHECK_ATTEMPTS}, retry delay: {CHECK_RETRY_DELAY}s)")
     while True:
-        success, latency = check_web(ROUTER_URL)
+        success, latency, attempts = check_web_with_retry(ROUTER_URL)
         insert_ping(success, latency)
         status = "UP" if success else "DOWN"
-        if latency is not None:
-            print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - {status} (latency: {latency:.2f}ms)")
-        else:
-            print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - {status}")
+        suffix = f" (latency: {latency:.2f}ms)" if latency is not None else ""
+        if attempts > 1:
+            suffix += f" (attempts: {attempts})"
+        print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - {status}{suffix}")
         time.sleep(INTERVAL)
 
 if __name__ == '__main__':
