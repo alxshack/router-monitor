@@ -1,9 +1,11 @@
 import time
 import sys
 import os
+import traceback
+import sqlite3
 import requests
 import urllib3
-from db import init_db, insert_ping
+from db import init_db, insert_ping, DB_NAME as DB_FILE
 
 # Самоподписанный сертификат роутера: подавляем предупреждение urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -46,17 +48,28 @@ def check_web_with_retry(url):
     return False, None, CHECK_ATTEMPTS
 
 def main():
-    init_db()
+    try:
+        init_db()
+    except sqlite3.OperationalError as e:
+        print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - DB error at init: {e}\n"
+              f"Проверьте права на {DB_FILE}: chown/chmod должен разрешать запись", file=sys.stderr)
     print(f"Service started. Checking {ROUTER_URL} every {INTERVAL}s "
           f"(attempts: {CHECK_ATTEMPTS}, retry delay: {CHECK_RETRY_DELAY}s)")
     while True:
-        success, latency, attempts = check_web_with_retry(ROUTER_URL)
-        insert_ping(success, latency)
-        status = "UP" if success else "DOWN"
-        suffix = f" (latency: {latency:.2f}ms)" if latency is not None else ""
-        if attempts > 1:
-            suffix += f" (attempts: {attempts})"
-        print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - {status}{suffix}")
+        try:
+            success, latency, attempts = check_web_with_retry(ROUTER_URL)
+            insert_ping(success, latency)
+            status = "UP" if success else "DOWN"
+            suffix = f" (latency: {latency:.2f}ms)" if latency is not None else ""
+            if attempts > 1:
+                suffix += f" (attempts: {attempts})"
+            print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - {status}{suffix}")
+        except sqlite3.OperationalError as e:
+            print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - DB error: {e}\n"
+                  f"Проверьте права на {DB_FILE}: chown/chmod должен разрешать запись", file=sys.stderr)
+        except Exception:
+            print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - unexpected error:\n"
+                  f"{traceback.format_exc()}", file=sys.stderr)
         time.sleep(INTERVAL)
 
 if __name__ == '__main__':
