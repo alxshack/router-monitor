@@ -167,7 +167,7 @@
             const barW = meta.data[0].width;
             const barTop = area.top - 30;
             const barH = 10;
-            const zoneMid = area.top - 65;
+            const zoneMid = area.top - 78;
 
             const x1Of = p => meta.data[p.startIdx].x - barW / 2;
             const x2Of = p => meta.data[p.endIdx].x + barW / 2;
@@ -182,7 +182,7 @@
             });
             c.restore();
 
-            // Длительности (по середине сегмента)
+            // Длительности (над сегментом)
             c.save();
             c.font = '10px Segoe UI, Arial, sans-serif';
             c.textAlign = 'center';
@@ -193,7 +193,7 @@
                 const x1 = x1Of(p), x2 = x2Of(p);
                 const w = c.measureText(p.durLabel).width;
                 if (x2 - x1 < w + 8) return;
-                c.fillText(p.durLabel, (x1 + x2) / 2, barTop + barH / 2);
+                c.fillText(p.durLabel, (x1 + x2) / 2, barTop - 7);
             });
             c.restore();
 
@@ -205,7 +205,7 @@
             });
             boundaries.sort((a, b) => a.x - b.x);
             c.save();
-            c.font = '9px Segoe UI, Arial, sans-serif';
+            c.font = '11px Segoe UI, Arial, sans-serif';
             c.textAlign = 'center';
             c.textBaseline = 'middle';
             c.fillStyle = '#2c3e50';
@@ -216,7 +216,7 @@
                 lastX = b.x;
                 c.save();
                 c.translate(b.x, zoneMid);
-                c.rotate(Math.PI / 2);
+                c.rotate(-Math.PI / 2);
                 c.fillText(b.label, 0, 0);
                 c.restore();
             });
