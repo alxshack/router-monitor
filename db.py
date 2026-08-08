@@ -1,130 +1,126 @@
 import sqlite3
 import datetime
+import os
 
-DB_NAME = 'router_monitor.db'
+DB_NAME = os.environ.get('ROUTER_MONITOR_DB', 'router_monitor.db')
+TIMEZONE_OFFSET = int(os.environ.get('TIMEZONE_OFFSET', 3))
+
+def _now_utc():
+    return datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None).isoformat()
 
 def init_db():
     conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS pings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT NOT NULL,
-            success INTEGER NOT NULL,
-            latency REAL
-        )
-    ''')
-    c.execute('CREATE INDEX IF NOT EXISTS idx_timestamp ON pings(timestamp)')
-    conn.commit()
-    conn.close()
+    try:
+        c = conn.cursor()
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS pings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                success INTEGER NOT NULL,
+                latency REAL
+            )
+        ''')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_timestamp ON pings(timestamp)')
+        conn.commit()
+    finally:
+        conn.close()
 
 def insert_ping(success, latency=None):
     conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    now = datetime.datetime.now().isoformat()
-    c.execute('INSERT INTO pings (timestamp, success, latency) VALUES (?, ?, ?)',
-              (now, 1 if success else 0, latency))
-    conn.commit()
-    conn.close()
-
-def cleanup_old_data(keep_days=365):
-    cutoff = (datetime.datetime.now() - datetime.timedelta(days=keep_days)).isoformat()
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute('DELETE FROM pings WHERE timestamp < ?', (cutoff,))
-    conn.commit()
-    conn.close()
+    try:
+        c = conn.cursor()
+        c.execute('INSERT INTO pings (timestamp, success, latency) VALUES (?, ?, ?)',
+                  (_now_utc(), 1 if success else 0, latency))
+        conn.commit()
+    finally:
+        conn.close()
 
 def get_recent(limit=100):
     conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute('SELECT timestamp, success, latency FROM pings ORDER BY timestamp DESC LIMIT ?', (limit,))
-    rows = c.fetchall()
-    conn.close()
-    return rows
+    try:
+        c = conn.cursor()
+        c.execute('SELECT timestamp, success, latency FROM pings ORDER BY timestamp DESC LIMIT ?', (limit,))
+        return c.fetchall()
+    finally:
+        conn.close()
 
-def get_stats():
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute('SELECT COUNT(*), SUM(success) FROM pings')
-    total, success_sum = c.fetchone()
-    if total is None or total == 0:
-        return {'total': 0, 'success': 0, 'fail': 0, 'percent': 0}
-    fail = total - (success_sum or 0)
-    percent = (success_sum / total * 100) if total else 0
-    conn.close()
-    return {
-        'total': total,
-        'success': success_sum or 0,
-        'fail': fail,
-        'percent': round(percent, 2)
-    }
-
-def get_day_data(date_str, offset_hours=4, current_time=None):
+def get_day_data(date_str):
     """
-    Возвращает список завершённых 10-минутных интервалов за указанную дату.
-    Каждый элемент: {'time': 'HH:MM', 'status': 1 (доступен), 0 (недоступен), None (нет данных)}
-    Обрезается по current_time (локальное время, datetime.time).
+    Возвращает все 144 десятиминутных интервала локального дня 00:00-24:00.
+    Каждый элемент: {'time': 'HH:MM', 'status': 1 (доступен), 0 (недоступен), None (нет данных)}.
     """
     conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    # Переводим локальный день в UTC интервал
-    dt_local_start = datetime.datetime.strptime(date_str, '%Y-%m-%d')
-    dt_local_end = dt_local_start + datetime.timedelta(days=1)
-    dt_utc_start = dt_local_start - datetime.timedelta(hours=offset_hours)
-    dt_utc_end = dt_local_end - datetime.timedelta(hours=offset_hours)
-    start_str = dt_utc_start.isoformat()
-    end_str = dt_utc_end.isoformat()
-    c.execute('SELECT timestamp, success FROM pings WHERE timestamp >= ? AND timestamp < ? ORDER BY timestamp ASC',
-              (start_str, end_str))
-    rows = c.fetchall()
-    conn.close()
+    try:
+        c = conn.cursor()
+        dt_local_start = datetime.datetime.strptime(date_str, '%Y-%m-%d')
+        dt_local_end = dt_local_start + datetime.timedelta(days=1)
+        dt_utc_start = dt_local_start - datetime.timedelta(hours=TIMEZONE_OFFSET)
+        dt_utc_end = dt_local_end - datetime.timedelta(hours=TIMEZONE_OFFSET)
+        c.execute('SELECT timestamp, success FROM pings WHERE timestamp >= ? AND timestamp < ? ORDER BY timestamp ASC',
+                  (dt_utc_start.isoformat(), dt_utc_end.isoformat()))
+        rows = c.fetchall()
+    finally:
+        conn.close()
 
-    # Инициализируем 144 интервала (ok, total)
     intervals = [[0, 0] for _ in range(144)]
     for ts, success in rows:
         dt_utc = datetime.datetime.fromisoformat(ts)
-        dt_local = dt_utc + datetime.timedelta(hours=offset_hours)
-        hour = dt_local.hour
-        minute = dt_local.minute
-        idx = hour * 6 + minute // 10
+        dt_local = dt_utc + datetime.timedelta(hours=TIMEZONE_OFFSET)
+        idx = dt_local.hour * 6 + dt_local.minute // 10
         intervals[idx][1] += 1
         if success == 1:
             intervals[idx][0] += 1
 
-    # Определяем, сколько интервалов уже завершено
-    if current_time is None:
-        # Если не передано, берём текущее локальное время
-        current_time = datetime.datetime.now() + datetime.timedelta(hours=offset_hours)
-        current_time = current_time.time()
-    # Вычисляем индекс последнего завершённого интервала
-    # Интервал завершён, если его конец <= current_time
-    # Конец интервала: (hour, minute+10) или следующий час
-    max_idx = -1
+    result = []
     for idx in range(144):
         hour = idx // 6
         minute = (idx % 6) * 10
-        # Время окончания интервала
-        end_hour = hour
-        end_minute = minute + 10
-        if end_minute >= 60:
-            end_hour += 1
-            end_minute -= 60
-        # Если конец интервала <= текущее время, он завершён
-        if (end_hour < current_time.hour) or (end_hour == current_time.hour and end_minute <= current_time.minute):
-            max_idx = idx
-        else:
-            break
-
-    result = []
-    for idx in range(max_idx + 1):
-        hour = idx // 6
-        minute = (idx % 6) * 10
-        time_str = f"{hour:02d}:{minute:02d}"
         ok, total = intervals[idx]
         if total == 0:
-            status = None  # нет данных
+            status = None
         else:
-            status = 1 if ok == total else 0  # все успешны -> 1, иначе 0
-        result.append({'time': time_str, 'status': status})
+            status = 1 if ok == total else 0
+        result.append({'time': f'{hour:02d}:{minute:02d}', 'status': status})
+    return result
+
+def get_range_stats(start_date_str, end_date_str):
+    """
+    Агрегация по дням за период [start_date_str, end_date_str] (локальные даты).
+    Каждый элемент: {'date': 'YYYY-MM-DD', 'percent': float|None, 'total': int}.
+    Возвращаются все дни диапазона, включая дни без данных.
+    """
+    conn = sqlite3.connect(DB_NAME)
+    try:
+        c = conn.cursor()
+        dt_local_start = datetime.datetime.strptime(start_date_str, '%Y-%m-%d')
+        dt_local_end = datetime.datetime.strptime(end_date_str, '%Y-%m-%d') + datetime.timedelta(days=1)
+        dt_utc_start = dt_local_start - datetime.timedelta(hours=TIMEZONE_OFFSET)
+        dt_utc_end = dt_local_end - datetime.timedelta(hours=TIMEZONE_OFFSET)
+        c.execute('SELECT timestamp, success FROM pings WHERE timestamp >= ? AND timestamp < ? ORDER BY timestamp ASC',
+                  (dt_utc_start.isoformat(), dt_utc_end.isoformat()))
+        rows = c.fetchall()
+    finally:
+        conn.close()
+
+    day_counts = {}
+    for ts, success in rows:
+        dt_utc = datetime.datetime.fromisoformat(ts)
+        dt_local = dt_utc + datetime.timedelta(hours=TIMEZONE_OFFSET)
+        day_key = dt_local.strftime('%Y-%m-%d')
+        bucket = day_counts.setdefault(day_key, [0, 0])
+        bucket[1] += 1
+        if success == 1:
+            bucket[0] += 1
+
+    result = []
+    cur = dt_local_start
+    while cur.strftime('%Y-%m-%d') <= end_date_str:
+        key = cur.strftime('%Y-%m-%d')
+        ok, total = day_counts.get(key, (0, 0))
+        if total == 0:
+            percent = None
+        else:
+            percent = round(ok / total * 100, 1)
+        result.append({'date': key, 'percent': percent, 'total': total})
+        cur += datetime.timedelta(days=1)
     return result

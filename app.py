@@ -1,11 +1,9 @@
-from flask import Flask, render_template, jsonify, request
-from db import get_stats, get_day_data, get_recent
 import datetime
-import sqlite3
+import os
+from flask import Flask, render_template, jsonify, request
+from db import get_recent, get_day_data, get_range_stats, TIMEZONE_OFFSET
 
 app = Flask(__name__)
-DB_NAME = 'router_monitor.db'
-TIMEZONE_OFFSET = 3   # UTC+3
 
 def localize(dt):
     return dt + datetime.timedelta(hours=TIMEZONE_OFFSET)
@@ -19,45 +17,24 @@ def format_datetime(iso_str):
               'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря']
     return f"{dt_local.day} {months[dt_local.month-1]} {dt_local.year} ({dt_local.hour:02d}:{dt_local.minute:02d})"
 
-def get_periods():
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute('SELECT timestamp, success FROM pings ORDER BY timestamp ASC')
-    rows = c.fetchall()
-    conn.close()
-    if not rows:
-        return []
-    periods = []
-    current_start = rows[0][0]
-    current_status = rows[0][1]
-    for ts, success in rows[1:]:
-        if success != current_status:
-            periods.append({
-                'start': current_start,
-                'end': ts,
-                'status': 'Доступен' if current_status else 'Недоступен'
-            })
-            current_start = ts
-            current_status = success
-    periods.append({
-        'start': current_start,
-        'end': None,
-        'status': 'Доступен' if current_status else 'Недоступен'
-    })
-    return periods
+def now_local():
+    return datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=TIMEZONE_OFFSET)
+
+def compute_end_date(start_str, mode):
+    start = datetime.datetime.strptime(start_str, '%Y-%m-%d')
+    if mode == 'week':
+        end = start + datetime.timedelta(days=6)
+    elif mode == 'month':
+        if start.month == 12:
+            end = start.replace(year=start.year + 1, month=1, day=1) - datetime.timedelta(days=1)
+        else:
+            end = start.replace(month=start.month + 1, day=1) - datetime.timedelta(days=1)
+    else:
+        end = start
+    return end.strftime('%Y-%m-%d')
 
 @app.route('/')
 def index():
-    stats = get_stats()
-    periods = get_periods()
-    periods_display = []
-    for p in periods:
-        periods_display.append({
-            'start': format_datetime(p['start']),
-            'end': format_datetime(p['end']) if p['end'] else 'сейчас',
-            'status': p['status']
-        })
-    # Получаем последнюю запись
     last_row = get_recent(1)
     last_status = None
     last_time = None
@@ -66,28 +43,30 @@ def index():
         last_status = 'Доступен' if success else 'Недоступен'
         last_time = format_datetime(ts)
     return render_template('index.html',
-                           stats=stats,
-                           periods=periods_display,
                            last_status=last_status,
                            last_time=last_time)
 
-@app.route('/api/day')
-def api_day():
-    date_str = request.args.get('date')
+@app.route('/api/range')
+def api_range():
+    date_str = request.args.get('start')
     if not date_str:
-        now_local = datetime.datetime.now() + datetime.timedelta(hours=TIMEZONE_OFFSET)
-        date_str = now_local.strftime('%Y-%m-%d')
-    # Передаём текущее локальное время для обрезки
-    current_local = datetime.datetime.now() + datetime.timedelta(hours=TIMEZONE_OFFSET)
-    data = get_day_data(date_str, offset_hours=TIMEZONE_OFFSET, current_time=current_local.time())
+        date_str = now_local().strftime('%Y-%m-%d')
+    mode = request.args.get('mode', 'day')
+    end_date = compute_end_date(date_str, mode)
+    if mode == 'day':
+        data = get_day_data(date_str)
+    else:
+        data = get_range_stats(date_str, end_date)
     return jsonify({
-        'date': date_str,
-        'intervals': data   # список словарей {time, status}
+        'start': date_str,
+        'end': end_date,
+        'mode': mode,
+        'intervals': data,
+        'now': now_local().isoformat()
     })
 
 @app.route('/api/status')
 def api_status():
-    stats = get_stats()
     last_row = get_recent(1)
     last = None
     if last_row:
@@ -97,13 +76,8 @@ def api_status():
             'success': bool(success),
             'latency': latency
         }
-    return jsonify({'stats': stats, 'last': last})
-
-@app.route('/api/data')
-def api_data():
-    rows = get_recent(500)
-    data = [{'timestamp': ts, 'success': success, 'latency': latency} for ts, success, latency in rows]
-    return jsonify(data)
+    return jsonify({'last': last})
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)

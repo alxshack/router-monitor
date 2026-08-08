@@ -1,14 +1,19 @@
 import time
 import sys
+import os
 import requests
-from db import init_db, insert_ping, cleanup_old_data
+import urllib3
+from db import init_db, insert_ping
+
+# Самоподписанный сертификат роутера: подавляем предупреждение urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Укажите ваш домен KeenDNS (без http://, только имя)
-ROUTER_DOMAIN = 'tihultra.netcraze.pro'   # замените на ваше имя
+ROUTER_DOMAIN = os.environ.get('ROUTER_DOMAIN', 'tihultra.netcraze.pro')
 # Используйте HTTPS, если админка доступна по HTTPS
 ROUTER_URL = f'https://{ROUTER_DOMAIN}'
-TIMEOUT = 5  # секунд
-INTERVAL = 600  # 10 минут
+TIMEOUT = float(os.environ.get('CHECK_TIMEOUT', 5))  # секунд
+INTERVAL = int(os.environ.get('CHECK_INTERVAL', 600))  # 10 минут
 
 def check_web(url):
     """Проверяет доступность веб-интерфейса по HTTP(S)."""
@@ -18,8 +23,8 @@ def check_web(url):
         # но лучше добавить сертификат в доверенные.
         response = requests.get(url, timeout=TIMEOUT, allow_redirects=True, verify=False)
         latency = (time.time() - start) * 1000
-        # Считаем успехом, если статус-код 200 (или хотя бы < 400)
-        success = response.status_code == 200
+        # Успехом считаем любой ответ ниже 400 (включая редиректы/логин-страницы)
+        success = response.status_code < 400
         return success, latency
     except requests.exceptions.RequestException as e:
         print(f"HTTP error: {e}", file=sys.stderr)
@@ -28,11 +33,7 @@ def check_web(url):
 def main():
     init_db()
     print(f"Service started. Checking {ROUTER_URL} every {INTERVAL}s")
-    last_cleanup = 0
     while True:
-        if time.time() - last_cleanup >= 24 * 3600:
-            cleanup_old_data()
-            last_cleanup = time.time()
         success, latency = check_web(ROUTER_URL)
         insert_ping(success, latency)
         status = "UP" if success else "DOWN"
