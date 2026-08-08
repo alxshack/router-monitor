@@ -25,12 +25,14 @@
         .end-date { color: #555; font-size: 0.95em; }
         .footer { margin-top: 20px; color: #7f8c8d; font-size: 0.9em; text-align: center; }
         .day-card { display: flex; align-items: center; gap: 5px; margin-bottom: 16px; }
-        .day-title { width: 190px; flex-shrink: 0; font-weight: 600; color: #2c3e50; text-align: center; transform: rotate(-90deg); }
+        .day-title-wrap { width: 16px; height: 140px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+        .day-title { white-space: nowrap; font-weight: 600; color: #2c3e50; transform: rotate(-90deg); }
         .day-chart-wrap { flex: 1; min-width: 0; }
         @media (max-width: 600px) {
             .controls { flex-direction: column; align-items: flex-start; }
             .day-card { flex-direction: column; align-items: flex-start; }
-            .day-title { width: auto; text-align: left; transform: none; }
+            .day-title-wrap { width: auto; height: auto; }
+            .day-title { white-space: normal; transform: none; }
         }
     </style>
 </head>
@@ -339,15 +341,18 @@
                     data.days.forEach(day => {
                         const card = document.createElement('div');
                         card.className = 'day-card';
+                        const titleWrap = document.createElement('div');
+                        titleWrap.className = 'day-title-wrap';
                         const title = document.createElement('div');
                         title.className = 'day-title';
                         title.textContent = dayTitle(day.date);
+                        titleWrap.appendChild(title);
                         const wrap = document.createElement('div');
                         wrap.className = 'day-chart-wrap';
                         const canvas = document.createElement('canvas');
                         canvas.height = 140;
                         wrap.appendChild(canvas);
-                        card.appendChild(title);
+                        card.appendChild(titleWrap);
                         card.appendChild(wrap);
                         daysContainer.appendChild(card);
                         const chart = createChart(canvas);
