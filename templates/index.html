@@ -248,22 +248,15 @@
         return r === 0 ? `${h} ч` : `${h} ч ${r} мин`;
     }
 
-    // Периоды: соседние одинаковые статусы; "нет данных" (null) — разрыв
+    // Периоды: соседние одинаковые статусы; "нет данных" трактуется как "нет активности"
     function buildPeriods(intervals, mode, startDate) {
         const periods = [];
         const startDD = startDate.slice(8, 10), startMM = startDate.slice(5, 7);
         let cur = null;
         intervals.forEach((item, i) => {
-            let val;
-            if (mode === 'day') {
-                val = (item.status === 1 || item.status === 0) ? item.status : null;
-            } else {
-                val = item.percent == null ? null : (item.percent >= 100 ? 1 : 0);
-            }
-            if (val === null) {
-                cur = null;
-                return;
-            }
+            const val = mode === 'day'
+                ? (item.status === 1 ? 1 : 0)
+                : (item.percent == null ? 0 : (item.percent >= 100 ? 1 : 0));
             const label = mode === 'day'
                 ? `${startDD}.${startMM} ${item.time}`
                 : `${item.date.slice(8, 10)}.${item.date.slice(5, 7)}`;
