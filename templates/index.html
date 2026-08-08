@@ -24,7 +24,14 @@
         .range-buttons button.active { background: #2c3e50; color: #fff; }
         .end-date { color: #555; font-size: 0.95em; }
         .footer { margin-top: 20px; color: #7f8c8d; font-size: 0.9em; text-align: center; }
-        @media (max-width: 600px) { .controls { flex-direction: column; align-items: flex-start; } }
+        .day-card { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+        .day-title { width: 190px; flex-shrink: 0; font-weight: 600; color: #2c3e50; text-align: right; }
+        .day-chart-wrap { flex: 1; min-width: 0; }
+        @media (max-width: 600px) {
+            .controls { flex-direction: column; align-items: flex-start; }
+            .day-card { flex-direction: column; align-items: flex-start; }
+            .day-title { width: auto; text-align: left; }
+        }
     </style>
 </head>
 <body>
@@ -50,7 +57,10 @@
             </div>
             <span class="end-date" id="endDateDisplay"></span>
         </div>
-        <canvas id="dayChart" height="170"></canvas>
+        <div id="dayCanvasWrap">
+            <canvas id="dayChart" height="170"></canvas>
+        </div>
+        <div id="daysContainer" style="display:none;"></div>
     </div>
 
     <div class="footer">Данные обновляются каждые 10 минут. Отчёт обновляется автоматически.</div>
@@ -65,21 +75,9 @@
     let currentStart = null;
     let currentEnd = null;
 
-    // ---------- Инициализация графика ----------
-    const ctx = document.getElementById('dayChart').getContext('2d');
-    let dayChart = new Chart(ctx, {
-        type: 'bar',
-        data: {
-            labels: [],
-            datasets: [{
-                label: 'Доступность',
-                data: [],
-                backgroundColor: [],
-                borderColor: '#888',
-                borderWidth: 1
-            }]
-        },
-        options: {
+    // ---------- Создание графика ----------
+    function chartOptions() {
+        return {
             responsive: true,
             layout: { padding: { top: 130 } },
             plugins: {
@@ -87,15 +85,9 @@
                 tooltip: {
                     callbacks: {
                         label: function(context) {
-                            if (currentMode === 'day') {
-                                const val = context.raw;
-                                if (val === null) return 'Нет данных';
-                                return val === 1 ? '✅ Доступен' : '❌ Недоступен';
-                            }
-                            const item = context.raw;
-                            if (item === null) return 'Нет данных';
-                            const total = dayChart.data.datasets[0].rawTotals[context.dataIndex];
-                            return total !== undefined ? `Доступность: ${item}% (проверок: ${total})` : `Доступность: ${item}%`;
+                            const val = context.raw;
+                            if (val === null) return 'Нет данных';
+                            return val === 1 ? '✅ Доступен' : '❌ Недоступен';
                         }
                     }
                 }
@@ -122,8 +114,37 @@
                     }
                 }
             }
-        }
-    });
+        };
+    }
+
+    function createChart(canvas) {
+        return new Chart(canvas.getContext('2d'), {
+            type: 'bar',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Доступность',
+                    data: [],
+                    backgroundColor: [],
+                    borderColor: '#888',
+                    borderWidth: 1
+                }]
+            },
+            options: chartOptions()
+        });
+    }
+
+    let dayChart = null;
+    let charts = [];
+    const dayCanvasWrap = document.getElementById('dayCanvasWrap');
+    const daysContainer = document.getElementById('daysContainer');
+
+    function destroyAll() {
+        if (dayChart) { dayChart.destroy(); dayChart = null; }
+        charts.forEach(c => c.destroy());
+        charts = [];
+        daysContainer.innerHTML = '';
+    }
 
     // ---------- Плагин: пунктирная линия текущего времени ----------
     const nowLinePlugin = {
@@ -238,10 +259,6 @@
         return { year: +m[1], month: +m[2], day: +m[3], hour: +m[4], minute: +m[5] };
     }
 
-    function daysBetween(a, b) {
-        return Math.round((Date.UTC(b.year, b.month-1, b.day) - Date.UTC(a.year, a.month-1, a.day)) / 86400000);
-    }
-
     function fmtMinutes(m) {
         if (m < 60) return `${m} мин`;
         const h = Math.floor(m / 60), r = m % 60;
@@ -249,17 +266,13 @@
     }
 
     // Периоды: соседние одинаковые статусы; "нет данных" трактуется как "нет активности"
-    function buildPeriods(intervals, mode, startDate) {
+    function buildPeriods(intervals, startDate) {
         const periods = [];
         const startDD = startDate.slice(8, 10), startMM = startDate.slice(5, 7);
         let cur = null;
         intervals.forEach((item, i) => {
-            const val = mode === 'day'
-                ? (item.status === 1 ? 1 : 0)
-                : (item.percent == null ? 0 : (item.percent >= 100 ? 1 : 0));
-            const label = mode === 'day'
-                ? `${startDD}.${startMM} ${item.time}`
-                : `${item.date.slice(8, 10)}.${item.date.slice(5, 7)}`;
+            const val = item.status === 1 ? 1 : 0;
+            const label = `${startDD}.${startMM} ${item.time}`;
             if (cur && cur.value === val) {
                 cur.endIdx = i;
                 cur.endLabel = label;
@@ -271,12 +284,36 @@
         if (cur) periods.push(cur);
         periods.forEach(p => {
             const cnt = p.endIdx - p.startIdx + 1;
-            p.durLabel = mode === 'day' ? fmtMinutes(cnt * 10) : `${cnt} д`;
+            p.durLabel = fmtMinutes(cnt * 10);
         });
         return periods;
     }
 
     // ---------- Обновление графика ----------
+    const weekdays = ['Воскресенье','Понедельник','Вторник','Среда','Четверг','Пятница','Суббота'];
+
+    function dayTitle(dateStr) {
+        const y = +dateStr.slice(0,4), m = +dateStr.slice(5,7), d = +dateStr.slice(8,10);
+        return `${weekdays[new Date(Date.UTC(y, m-1, d)).getUTCDay()]}, ${d} ${months[m-1]}`;
+    }
+
+    function nowIndexForDay(now) {
+        if (!now) return null;
+        return Math.min(Math.floor(now.hour * 6 + now.minute / 10), 143);
+    }
+
+    function fillChart(chart, intervals, startDate, nowIndex) {
+        chart.data.labels = intervals.map(item => item.time);
+        chart.data.datasets[0].data = intervals.map(item => item.status);
+        chart.data.datasets[0].backgroundColor = intervals.map(item => {
+            if (item.status === null) return '#cccccc';
+            return item.status === 1 ? '#27ae60' : '#e74c3c';
+        });
+        chart.nowLineIndex = nowIndex;
+        chart.periods = buildPeriods(intervals, startDate);
+        chart.update();
+    }
+
     function updateChart() {
         if (!currentStart) return;
         fetch(`/api/range?start=${currentStart}&mode=${currentMode}`)
@@ -286,63 +323,39 @@
                 const endDisplay = document.getElementById('endDateDisplay');
                 endDisplay.textContent = 'Отчёт до: ' + formatDateRu(data.end);
 
-                const intervals = data.intervals;
-                const labels = intervals.map(item => item.time || item.date);
                 const now = parseNaiveISO(data.now);
+                const nowDateStr = now ? `${now.year}-${pad(now.month)}-${pad(now.day)}` : null;
+                destroyAll();
 
-                let values, colors, nowIndex = null;
                 if (data.mode === 'day') {
-                    values = intervals.map(item => item.status);
-                    colors = intervals.map(item => {
-                        if (item.status === null) return '#cccccc';
-                        return item.status === 1 ? '#27ae60' : '#e74c3c';
-                    });
-                    // Линия "сейчас": текущее время в пределах отображаемого дня
-                    if (now) {
-                        const nowDateStr = `${now.year}-${pad(now.month)}-${pad(now.day)}`;
-                        if (nowDateStr === data.start) {
-                            nowIndex = Math.min(Math.floor(now.hour * 6 + now.minute / 10), 143);
-                        }
-                    }
+                    dayCanvasWrap.style.display = '';
+                    daysContainer.style.display = 'none';
+                    dayChart = createChart(document.getElementById('dayChart'));
+                    fillChart(dayChart, data.intervals, data.start,
+                              nowDateStr === data.start ? nowIndexForDay(now) : null);
                 } else {
-                    values = intervals.map(item => item.percent);
-                    colors = intervals.map(item => {
-                        if (item.percent === null) return '#cccccc';
-                        return item.percent >= 100 ? '#27ae60' : '#e74c3c';
+                    dayCanvasWrap.style.display = 'none';
+                    daysContainer.style.display = '';
+                    data.days.forEach(day => {
+                        const card = document.createElement('div');
+                        card.className = 'day-card';
+                        const title = document.createElement('div');
+                        title.className = 'day-title';
+                        title.textContent = dayTitle(day.date);
+                        const wrap = document.createElement('div');
+                        wrap.className = 'day-chart-wrap';
+                        const canvas = document.createElement('canvas');
+                        canvas.height = 140;
+                        wrap.appendChild(canvas);
+                        card.appendChild(title);
+                        card.appendChild(wrap);
+                        daysContainer.appendChild(card);
+                        const chart = createChart(canvas);
+                        fillChart(chart, day.intervals, day.date,
+                                  nowDateStr === day.date ? nowIndexForDay(now) : null);
+                        charts.push(chart);
                     });
-                    // Линия "сейчас": сегодняшний день в пределах диапазона
-                    if (now) {
-                        const nowDateStr = `${now.year}-${pad(now.month)}-${pad(now.day)}`;
-                        const diff = daysBetween({year:+data.start.slice(0,4), month:+data.start.slice(5,7), day:+data.start.slice(8,10)}, now);
-                        if (nowDateStr >= data.start && nowDateStr <= data.end) {
-                            nowIndex = diff;
-                        }
-                    }
-                    // Шкала процентов для недели/месяца
-                    dayChart.options.scales.y.min = 0;
-                    dayChart.options.scales.y.max = 100;
-                    dayChart.options.scales.y.ticks.stepSize = 25;
-                    dayChart.options.scales.y.ticks.callback = function(value) { return value + '%'; };
                 }
-
-                if (data.mode === 'day') {
-                    dayChart.options.scales.y.min = -0.2;
-                    dayChart.options.scales.y.max = 1.2;
-                    dayChart.options.scales.y.ticks.stepSize = 1;
-                    dayChart.options.scales.y.ticks.callback = function(value) {
-                        if (value === 0) return '❌';
-                        if (value === 1) return '✅';
-                        return '';
-                    };
-                }
-
-                dayChart.data.labels = labels;
-                dayChart.data.datasets[0].data = values;
-                dayChart.data.datasets[0].backgroundColor = colors;
-                dayChart.data.datasets[0].rawTotals = intervals.map(item => item.total);
-                dayChart.nowLineIndex = nowIndex;
-                dayChart.periods = buildPeriods(intervals, data.mode, data.start);
-                dayChart.update();
             })
             .catch(err => {
                 console.error('Ошибка загрузки данных:', err);

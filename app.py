@@ -1,7 +1,7 @@
 import datetime
 import os
 from flask import Flask, render_template, jsonify, request
-from db import get_recent, get_day_data, get_range_stats, TIMEZONE_OFFSET
+from db import get_recent, get_day_data, get_range_days, TIMEZONE_OFFSET
 
 app = Flask(__name__)
 
@@ -55,13 +55,15 @@ def api_range():
     end_date = compute_end_date(date_str, mode)
     if mode == 'day':
         data = get_day_data(date_str)
+        payload = {'intervals': data}
     else:
-        data = get_range_stats(date_str, end_date)
+        data = get_range_days(date_str, end_date)
+        payload = {'days': data}
     return jsonify({
         'start': date_str,
         'end': end_date,
         'mode': mode,
-        'intervals': data,
+        **payload,
         'now': now_local().isoformat()
     })
 
