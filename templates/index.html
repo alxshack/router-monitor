@@ -195,12 +195,12 @@
             const x1Of = p => meta.data[p.startIdx].x - barW / 2;
             const x2Of = p => meta.data[p.endIdx].x + barW / 2;
 
-            // Сегменты
+            // Сегменты (1 - доступен, 0 - нет активности, -1 - будущее)
             c.save();
             periods.forEach(p => {
                 const x1 = x1Of(p), x2 = x2Of(p);
                 if (x2 < area.left || x1 > area.right) return;
-                c.fillStyle = p.value === 1 ? '#27ae60' : '#e74c3c';
+                c.fillStyle = p.value === 1 ? '#27ae60' : (p.value === -1 ? '#cccccc' : '#e74c3c');
                 c.fillRect(x1, barTop, x2 - x1, barH);
             });
             c.restore();
@@ -267,13 +267,14 @@
         return r === 0 ? `${h} ч` : `${h} ч ${r} мин`;
     }
 
-    // Периоды: соседние одинаковые статусы; "нет данных" трактуется как "нет активности"
-    function buildPeriods(intervals, startDate) {
+    // Периоды: соседние одинаковые статусы; "нет данных" трактуется как "нет активности";
+    // интервалы после nowIndex (будущее) — отдельный серый сегмент
+    function buildPeriods(intervals, startDate, nowIndex) {
         const periods = [];
         const startDD = startDate.slice(8, 10), startMM = startDate.slice(5, 7);
         let cur = null;
         intervals.forEach((item, i) => {
-            const val = item.status === 1 ? 1 : 0;
+            const val = (nowIndex != null && i > nowIndex) ? -1 : (item.status === 1 ? 1 : 0);
             const label = `${startDD}.${startMM} ${item.time}`;
             if (cur && cur.value === val) {
                 cur.endIdx = i;
@@ -312,7 +313,7 @@
             return item.status === 1 ? '#27ae60' : '#e74c3c';
         });
         chart.nowLineIndex = nowIndex;
-        chart.periods = buildPeriods(intervals, startDate);
+        chart.periods = buildPeriods(intervals, startDate, nowIndex);
         chart.update();
     }
 
