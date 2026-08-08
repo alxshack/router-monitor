@@ -50,8 +50,8 @@
             </div>
             <span class="end-date" id="endDateDisplay"></span>
         </div>
-        <canvas id="dayChart" height="160"></canvas>
-        <p style="text-align:center; color:#555; margin-top:10px;">✅ Зелёный – интервал полностью доступен, ❌ Красный – были сбои, ⬜ Серый – нет данных. Стрелка внизу показывает текущее время.</p>
+        <canvas id="dayChart" height="80"></canvas>
+        <p style="text-align:center; color:#555; margin-top:10px;">✅ Зелёный – интервал полностью доступен, ❌ Красный – были сбои, ⬜ Серый – нет данных. Пунктирная линия показывает текущее время.</p>
     </div>
 
     <div class="footer">Данные обновляются каждые 10 минут. Отчёт обновляется автоматически.</div>
@@ -125,39 +125,34 @@
         }
     });
 
-    // ---------- Плагин: стрелка текущего времени ----------
-    const nowArrowPlugin = {
-        id: 'nowArrow',
+    // ---------- Плагин: пунктирная линия текущего времени ----------
+    const nowLinePlugin = {
+        id: 'nowLine',
         afterDatasetsDraw(chart) {
-            const idx = chart.options.plugins.nowArrow?.index;
+            const idx = chart.nowLineIndex;
             if (idx == null) return;
             const meta = chart.getDatasetMeta(0);
             if (!meta.data || !meta.data[idx]) return;
             const x = meta.data[idx].x;
-            const y = chart.chartArea.bottom;
+            const area = chart.chartArea;
             const c = chart.ctx;
             c.save();
             c.strokeStyle = '#2c3e50';
             c.fillStyle = '#2c3e50';
-            c.lineWidth = 2;
+            c.lineWidth = 1.5;
+            c.setLineDash([6, 4]);
             c.beginPath();
-            c.moveTo(x, y);
-            c.lineTo(x, y - 14);
+            c.moveTo(x, area.top);
+            c.lineTo(x, area.bottom);
             c.stroke();
-            c.beginPath();
-            c.moveTo(x - 6, y - 8);
-            c.lineTo(x, y);
-            c.lineTo(x + 6, y - 8);
-            c.closePath();
-            c.fill();
+            c.setLineDash([]);
+            c.font = '12px Segoe UI, Arial, sans-serif';
+            c.textAlign = 'left';
+            c.fillText('сейчас', x + 5, area.top + 12);
             c.restore();
         }
     };
-    Chart.register(nowArrowPlugin);
-
-    function setArrowIndex(index) {
-        dayChart.options.plugins.nowArrow = { index: index };
-    }
+    Chart.register(nowLinePlugin);
 
     // ---------- Форматирование ----------
     function formatDateRu(dateStr) {
@@ -190,18 +185,18 @@
                 const labels = intervals.map(item => item.time || item.date);
                 const now = parseNaiveISO(data.now);
 
-                let values, colors, arrowIndex = null;
+                let values, colors, nowIndex = null;
                 if (data.mode === 'day') {
                     values = intervals.map(item => item.status);
                     colors = intervals.map(item => {
                         if (item.status === null) return '#cccccc';
                         return item.status === 1 ? '#27ae60' : '#e74c3c';
                     });
-                    // Стрелка: текущее время в пределах отображаемого дня
+                    // Линия "сейчас": текущее время в пределах отображаемого дня
                     if (now) {
                         const nowDateStr = `${now.year}-${pad(now.month)}-${pad(now.day)}`;
                         if (nowDateStr === data.start) {
-                            arrowIndex = Math.min(now.hour * 6 + now.minute / 10 + 0.5, 143.5);
+                            nowIndex = Math.min(Math.floor(now.hour * 6 + now.minute / 10), 143);
                         }
                     }
                 } else {
@@ -210,12 +205,12 @@
                         if (item.percent === null) return '#cccccc';
                         return item.percent >= 100 ? '#27ae60' : '#e74c3c';
                     });
-                    // Стрелка: сегодняшний день в пределах диапазона
+                    // Линия "сейчас": сегодняшний день в пределах диапазона
                     if (now) {
                         const nowDateStr = `${now.year}-${pad(now.month)}-${pad(now.day)}`;
                         const diff = daysBetween({year:+data.start.slice(0,4), month:+data.start.slice(5,7), day:+data.start.slice(8,10)}, now);
                         if (nowDateStr >= data.start && nowDateStr <= data.end) {
-                            arrowIndex = diff + 0.5;
+                            nowIndex = diff;
                         }
                     }
                     // Шкала процентов для недели/месяца
@@ -240,7 +235,7 @@
                 dayChart.data.datasets[0].data = values;
                 dayChart.data.datasets[0].backgroundColor = colors;
                 dayChart.data.datasets[0].rawTotals = intervals.map(item => item.total);
-                setArrowIndex(arrowIndex);
+                dayChart.nowLineIndex = nowIndex;
                 dayChart.update();
             })
             .catch(err => {
